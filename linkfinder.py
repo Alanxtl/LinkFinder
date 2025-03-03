@@ -82,10 +82,8 @@ def parser_input(input):
     '''
     Parse Input
     '''
-
     # Method 1 - URL
-    if input.startswith(('http://', 'https://',
-                         'file://', 'ftp://', 'ftps://')):
+    if input.startswith(('http://', 'https://', 'file://', 'ftp://', 'ftps://')):
         return [input]
 
     # Method 2 - URL Inspector Firefox
@@ -96,9 +94,8 @@ def parser_input(input):
     if args.burp:
         jsfiles = []
         items = xml.etree.ElementTree.fromstring(open(args.input, "r").read())
-
         for item in items:
-            jsfiles.append({"js":base64.b64decode(item.find('response').text).decode('utf-8',"replace"), "url":item.find('url').text})
+            jsfiles.append({"js": base64.b64decode(item.find('response').text).decode('utf-8', "replace"), "url": item.find('url').text})
         return jsfiles
 
     # Method 4 - Folder with a wildcard
@@ -106,45 +103,49 @@ def parser_input(input):
         paths = glob.glob(os.path.abspath(input))
         file_paths = [p for p in paths if os.path.isfile(p)]
         for index, path in enumerate(file_paths):
-            file_paths[index] = "file://%s" % path
-        return (file_paths if len(file_paths) > 0 else parser_error('Input with wildcard does \
-        not match any files.'))
+            file_paths[index] = "file://%s" % path.replace("\\", "/")
+        return (file_paths if len(file_paths) > 0 else parser_error('Input with wildcard does not match any files.'))
 
     # Method 5 - Local file
-    path = "file://%s" % os.path.abspath(input)
-    return [path if os.path.exists(input) else parser_error("file could not \
-be found (maybe you forgot to add http/https).")]
+    path = os.path.abspath(input).replace("\\", "/")
+    return ["file://%s" % path if os.path.exists(input) else parser_error("file could not be found.")]
 
 
 def send_request(url):
     '''
     Send requests with Requests
     '''
-    q = Request(url)
-
-    q.add_header('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
-        AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36')
-    q.add_header('Accept', 'text/html,\
-        application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8')
-    q.add_header('Accept-Language', 'en-US,en;q=0.8')
-    q.add_header('Accept-Encoding', 'gzip')
-    q.add_header('Cookie', args.cookies)
-
-    try:
-        sslcontext = ssl.create_default_context()
-        response = urlopen(q, timeout=args.timeout, context=sslcontext)
-    except:
-        sslcontext = ssl.create_default_context()
-        response = urlopen(q, timeout=args.timeout, context=sslcontext)
-
-    if response.info().get('Content-Encoding') == 'gzip':
-        data = GzipFile(fileobj=readBytesCustom(response.read())).read()
-    elif response.info().get('Content-Encoding') == 'deflate':
-        data = response.read().read()
+    if url.startswith('file://'):
+        # Handle local file
+        file_path = url[7:]  # Remove 'file://' prefix
+        try:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                return file.read()
+        except Exception as e:
+            parser_error(f"Failed to read local file: {e}")
     else:
-        data = response.read()
+        # Handle HTTP/HTTPS URLs
+        q = Request(url)
+        q.add_header('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36')
+        q.add_header('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8')
+        q.add_header('Accept-Language', 'en-US,en;q=0.8')
+        q.add_header('Accept-Encoding', 'gzip')
+        q.add_header('Cookie', args.cookies)
 
-    return data.decode('utf-8', 'replace')
+        try:
+            sslcontext = ssl.create_default_context()
+            response = urlopen(q, timeout=args.timeout, context=sslcontext)
+        except Exception as e:
+            parser_error(f"Failed to fetch URL: {e}")
+
+        if response.info().get('Content-Encoding') == 'gzip':
+            data = GzipFile(fileobj=readBytesCustom(response.read())).read()
+        elif response.info().get('Content-Encoding') == 'deflate':
+            data = response.read().read()
+        else:
+            data = response.read()
+
+        return data.decode('utf-8', 'replace')
 
 def getContext(list_matches, content, include_delimiter=0, context_delimiter_str="\n"):
     '''
@@ -245,27 +246,33 @@ def html_save(html):
     '''
     Save as HTML file and open in the browser
     '''
-    hide = os.dup(1)
-    os.close(1)
-    os.open(os.devnull, os.O_RDWR)
     try:
-        s = Template(open('%s/template.html' % sys.path[0], 'r').read())
+        # Ensure the output path uses forward slashes
+        output_path = os.path.abspath(args.output).replace("\\", "/")
 
-        text_file = open(args.output, "wb")
-        text_file.write(s.substitute(content=html).encode('utf8'))
-        text_file.close()
+        # Ensure the template file exists
+        template_path = os.path.join(os.path.dirname(__file__), "template.html")
+        if not os.path.exists(template_path):
+            raise FileNotFoundError("template.html file not found in the script directory.")
 
-        print("URL to access output: file://%s" % os.path.abspath(args.output))
-        file = "file:///%s" % os.path.abspath(args.output)
+        # Load the template
+        with open(template_path, "r", encoding="utf-8") as template_file:
+            s = Template(template_file.read())
+
+        # Save the HTML content to the output file
+        with open(output_path, "w", encoding="utf-8") as text_file:
+            text_file.write(s.substitute(content=html))
+
+        print("URL to access output: file://%s" % output_path)
+
+        # Open the file in the default browser
+        file_url = "file:///%s" % output_path
         if sys.platform == 'linux' or sys.platform == 'linux2':
-            subprocess.call(["xdg-open", file])
+            subprocess.call(["xdg-open", file_url])
         else:
-            webbrowser.open(file)
+            webbrowser.open(file_url)
     except Exception as e:
-        print("Output can't be saved in %s \
-            due to exception: %s" % (args.output, e))
-    finally:
-        os.dup2(hide, 1)
+        sys.stderr.write("Output can't be saved in %s due to exception: %s\n" % (args.output, e))
 
 def check_url(url):
     nopelist = ["node_modules", "jquery.js"]
@@ -324,6 +331,8 @@ if __name__ == "__main__":
 
     # Convert input to URLs or JS files
     urls = parser_input(args.input)
+    for i in range(len(urls)):
+        urls[i] = urls[i].replace("\\", "/")
 
     # Convert URLs to JS
     output = ''
